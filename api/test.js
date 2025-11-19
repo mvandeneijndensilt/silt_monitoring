@@ -1,16 +1,10 @@
-// api/fetch-to-supabase-full.js
-// Fetch all BLIK measurements and upsert into Supabase
-
-// TLS workaround (development only)
-// Verwijder of commentaar in productie en gebruik correcte host met geldig cert
+// api/fetch-to-supabase-dynamic.js
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 import fetch from 'node-fetch';
 import { createClient } from '@supabase/supabase-js';
 
-// -------------------------------
 // Supabase client
-// -------------------------------
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -18,24 +12,16 @@ const supabase = createClient(
 
 const SUPABASE_TABLE = 'BLIK_api';
 
-// -------------------------------
-// Fixed config (mag zichtbaar)
-// -------------------------------
+// Config
 const AUTH_DOMAIN = "blik.eu.auth0.com";
 const API_DOMAIN = "water.bliksensing.nl"; // of lora.bliksensing.nl voor productie
-const BATCH_SIZE = 1;       // kan verhogen bij stabielere omgeving
+const BATCH_SIZE = 1;
 const LIMIT_PER_PAGE = 1000;
 const CLIENT_ID = "ppiD46WfEm3i1R7cuQmSWHrhdXqWc96j";
 const AUDIENCE = "https://water.bliksensing.nl";
-
-// -------------------------------
-// Secret from env
-// -------------------------------
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 
-// -------------------------------
-// Auth0 token request
-// -------------------------------
+// Auth0 token
 async function getAccessToken() {
   const res = await fetch(`https://${AUTH_DOMAIN}/oauth/token`, {
     method: 'POST',
@@ -47,20 +33,13 @@ async function getAccessToken() {
       audience: AUDIENCE
     })
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Auth0 token request failed: ${res.status} ${text}`);
-  }
-
+  if (!res.ok) throw new Error(`Auth0 token request failed: ${res.status} ${await res.text()}`);
   const data = await res.json();
   if (!data.access_token) throw new Error("No access_token returned from Auth0");
   return data.access_token;
 }
 
-// -------------------------------
-// Fetch all locations
-// -------------------------------
+// Fetch locations
 async function fetchLocations(token) {
   const res = await fetch(`https://${API_DOMAIN}/api/v3/locations`, {
     headers: { Authorization: `Bearer ${token}` }
@@ -70,9 +49,7 @@ async function fetchLocations(token) {
   return Array.isArray(body) ? body : Object.values(body);
 }
 
-// -------------------------------
-// Fetch all measurements for a location (no delta)
-// -------------------------------
+// Fetch measurements
 async function fetchMeasurements(token, locationId) {
   const results = [];
   let after = null;
@@ -81,19 +58,16 @@ async function fetchMeasurements(token, locationId) {
     const qs = new URLSearchParams({ limit: LIMIT_PER_PAGE });
     if (after) qs.set('after', after);
 
-    const res = await fetch(`https://${API_DOMAIN}/api/v2/locations/${locationId}/measurements?${qs}`, {
+    const res = await fetch(`https://${API_DOMAIN}/api/v3/locations/${locationId}/measurements?${qs}`, {
       headers: { Authorization: `Bearer ${token}` }
     });
-
     if (!res.ok) throw new Error(`Failed measurements for location ${locationId}: ${res.status}`);
-
     const page = await res.json();
     if (!Array.isArray(page) || page.length === 0) break;
 
     results.push(...page);
 
     if (page.length < LIMIT_PER_PAGE) break;
-
     after = page[page.length - 1]?.timestamp;
     if (!after) break;
   }
@@ -101,25 +75,21 @@ async function fetchMeasurements(token, locationId) {
   return results;
 }
 
-// -------------------------------
-// Upsert measurement
-// -------------------------------
+// Upsert measurement dynamisch
 async function upsertMeasurement(m) {
+  // Basisvelden
   const record = {
     measurement_id: m.id ?? null,
     location_id: m.locationId ?? m.location_id ?? m.location ?? null,
-    airPressure_Pa: m.airPressure_Pa ?? null,
-    airTemp_mK: m.airTemp_mK ?? null,
-    autoValidation: m.autoValidation ?? null,
-    deleted: m.deleted ?? null,
-    manualValidation: m.manualValidation ?? null,
     timestamp: m.timestamp ?? m.time ?? null,
-    waterGround_mm: m.waterGround_mm ?? null,
-    waterNAP_mm: m.waterNAP_mm ?? null,
-    waterPressure_Pa: m.waterPressure_Pa ?? null,
-    waterTemp_mK: m.waterTemp_mK ?? null,
     data: m
   };
+
+  // Voeg dynamisch alle overige velden toe
+  const reserved = new Set(['id','locationId','location_id','location','timestamp','time']);
+  Object.entries(m).forEach(([k, v]) => {
+    if (!reserved.has(k)) record[k] = v;
+  });
 
   const { error } = await supabase
     .from(SUPABASE_TABLE)
@@ -128,12 +98,10 @@ async function upsertMeasurement(m) {
   if (error) console.error('Upsert error:', error, 'Record:', record);
 }
 
-// -------------------------------
 // Vercel handler
-// -------------------------------
 export default async function handler(req, res) {
   try {
-    console.log('Starting FULL BLIK sync...');
+    console.log('Starting FULL dynamic BLIK sync...');
     const offset = parseInt(req.query.offset || '0', 10);
 
     const token = await getAccessToken();

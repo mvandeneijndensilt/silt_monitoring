@@ -1,8 +1,7 @@
 // api/fetch-to-supabase-full.js
-// Fetch all BLIK measurements and upsert into Supabase
+// Fetch all BLIK measurements via API v3 and upsert into Supabase
 
 // TLS workaround (development only)
-// Verwijder of commentaar in productie en gebruik correcte host met geldig cert
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 import fetch from 'node-fetch';
@@ -23,7 +22,7 @@ const SUPABASE_TABLE = 'BLIK_api';
 // -------------------------------
 const AUTH_DOMAIN = "blik.eu.auth0.com";
 const API_DOMAIN = "water.bliksensing.nl"; // of lora.bliksensing.nl voor productie
-const BATCH_SIZE = 10;       // kan verhogen bij stabielere omgeving
+const BATCH_SIZE = 1;       // veiliger voor grote datasets
 const LIMIT_PER_PAGE = 1000;
 const CLIENT_ID = "ppiD46WfEm3i1R7cuQmSWHrhdXqWc96j";
 const AUDIENCE = "https://water.bliksensing.nl";
@@ -59,7 +58,7 @@ async function getAccessToken() {
 }
 
 // -------------------------------
-// Fetch all locations
+// Fetch all locations (v3)
 // -------------------------------
 async function fetchLocations(token) {
   const res = await fetch(`https://${API_DOMAIN}/api/v3/locations`, {
@@ -71,7 +70,7 @@ async function fetchLocations(token) {
 }
 
 // -------------------------------
-// Fetch all measurements for a location (no delta)
+// Fetch all measurements for a location (v3, no delta)
 // -------------------------------
 async function fetchMeasurements(token, locationId) {
   const results = [];
@@ -81,7 +80,7 @@ async function fetchMeasurements(token, locationId) {
     const qs = new URLSearchParams({ limit: LIMIT_PER_PAGE });
     if (after) qs.set('after', after);
 
-    const res = await fetch(`https://${API_DOMAIN}/api/v2/locations/${locationId}/measurements?${qs}`, {
+    const res = await fetch(`https://${API_DOMAIN}/api/v3/locations/${locationId}/measurements?${qs}`, {
       headers: { Authorization: `Bearer ${token}` }
     });
 
@@ -89,6 +88,8 @@ async function fetchMeasurements(token, locationId) {
 
     const page = await res.json();
     if (!Array.isArray(page) || page.length === 0) break;
+
+    console.log(`Fetched ${page.length} measurements for location ${locationId}`); // debug
 
     results.push(...page);
 
@@ -133,7 +134,7 @@ async function upsertMeasurement(m) {
 // -------------------------------
 export default async function handler(req, res) {
   try {
-    console.log('Starting FULL BLIK sync...');
+    console.log('Starting FULL BLIK sync via API v3...');
     const offset = parseInt(req.query.offset || '0', 10);
 
     const token = await getAccessToken();

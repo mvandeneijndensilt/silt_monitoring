@@ -2,13 +2,15 @@
   "name": "blik-project",
   "version": "1.0.0",
   "description": "Vercel serverless function to fetch BLIK measurements and insert into Supabase",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "node api/fetch-to-supabase.js"
   },
   "dependencies": {
     "pg": "^8.11.1",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "@supabase/supabase-js": "^2.36.0"
   },
   "engines": {
     "node": ">=18"

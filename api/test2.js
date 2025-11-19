@@ -52,8 +52,6 @@ async function fetchMeasurements(token, locationId) {
   });
   const page = await res.json();
   console.log('Fetched measurements for location', locationId, page);
-
-  // Return always an array
   if (!Array.isArray(page)) return [];
   return page;
 }
@@ -62,7 +60,7 @@ async function fetchMeasurements(token, locationId) {
 async function upsertMeasurement(m) {
   const record = {
     measurement_id: m.id ?? null,
-    location_id: m.locationId ?? m.location_id ?? m.location ?? null,
+    location_id: m.locationId ?? m.location_id ?? m.location ?? 1, // default 1 voor test
     timestamp: m.timestamp ?? m.time ?? new Date().toISOString(),
     data: m
   };
@@ -91,7 +89,7 @@ export default async function handler(req, res) {
 
     // Test: pak alleen de eerste locatie
     const loc = locations[0];
-    const locationId = loc.id ?? loc.locationId ?? loc.location_id;
+    const locationId = loc.id ?? loc.locationId ?? loc.location_id ?? 1;
 
     const measurements = await fetchMeasurements(token, locationId);
 
@@ -101,7 +99,7 @@ export default async function handler(req, res) {
       imported++;
     }
 
-    // Voeg dummy record alleen toe als er echt geen metingen zijn
+    // Voeg dummy record toe als er geen echte metingen zijn
     if (imported === 0) {
       await upsertMeasurement({ testValue: 123 });
       imported = 1;

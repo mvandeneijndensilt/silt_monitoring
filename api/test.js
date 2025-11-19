@@ -1,11 +1,184 @@
-const { Pool } = require('pg');
-const pool = new Pool({ connectionString: process.env.PG_SUPABASE_URL });
+// api/fetch-to-supabase.js
+// Vercel serverless function: fetch BLIK measurements and upsert into Supabase
 
-module.exports = async (req, res) => {
+import fetch from 'node-fetch';
+import { createClient } from '@supabase/supabase-js';
+
+// -------------------------------
+// Supabase client (service role for insert/upsert)
+// -------------------------------
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+const SUPABASE_TABLE = 'BLIK_api';
+
+// -------------------------------
+// Fixed configuration (mag zichtbaar)
+// -------------------------------
+const AUTH_DOMAIN = "blik.eu.auth0.com";
+const API_DOMAIN = "water.bliksensing.nl";
+const BATCH_SIZE = 1;
+const LIMIT_PER_PAGE = 1000;
+const CLIENT_ID = "ppiD46WfEm3i1R7cuQmSWHrhdXqWc96j";
+const AUDIENCE = "https://water.bliksensing.nl";
+
+// -------------------------------
+// Auth0 token (CLIENT_SECRET = geheim)
+// -------------------------------
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
+
+async function getAccessToken() {
+  const res = await fetch(`https://${AUTH_DOMAIN}/oauth/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'client_credentials',
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      audience: AUDIENCE
+    })
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Auth0 token request failed: ${res.status} ${text}`);
+  }
+
+  const data = await res.json();
+  if (!data.access_token) throw new Error("No access_token returned from Auth0");
+  return data.access_token;
+}
+
+// -------------------------------
+// Fetch locations
+// -------------------------------
+async function fetchLocations(token) {
+  const res = await fetch(`https://${API_DOMAIN}/api/v3/locations`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) throw new Error(`Failed to fetch locations: ${res.status} ${await res.text()}`);
+  const body = await res.json();
+  return Array.isArray(body) ? body : Object.values(body);
+}
+
+// -------------------------------
+// Fetch measurements for a location
+// -------------------------------
+async function fetchMeasurements(token, locationId, since = null) {
+  const results = [];
+  let after = since || null;
+
+  while (true) {
+    const qs = new URLSearchParams({ limit: LIMIT_PER_PAGE });
+    if (after) qs.set('after', after);
+
+    const res = await fetch(`https://${API_DOMAIN}/api/v2/locations/${locationId}/measurements?${qs}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) throw new Error(`Failed measurements for location ${locationId}: ${res.status}`);
+
+    const page = await res.json();
+    if (!Array.isArray(page) || page.length === 0) break;
+
+    results.push(...page);
+    if (page.length < LIMIT_PER_PAGE) break;
+
+    after = page[page.length - 1]?.timestamp;
+    if (!after) break;
+  }
+
+  return since ? results.filter(m => new Date(m.timestamp) > new Date(since)) : results;
+}
+
+// -------------------------------
+// Get latest timestamp for delta sync
+// -------------------------------
+async function getLatestTimestamp(locationId) {
+  const { data, error } = await supabase
+    .from(SUPABASE_TABLE)
+    .select('timestamp')
+    .eq('location_id', locationId)
+    .order('timestamp', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (error && error.code !== 'PGRST116') console.error('Latest timestamp error:', error);
+  return data?.timestamp || null;
+}
+
+// -------------------------------
+// Upsert a measurement
+// -------------------------------
+async function upsertMeasurement(m) {
+  const record = {
+    measurement_id: m.id ?? null,
+    location_id: m.locationId ?? m.location_id ?? m.location ?? null,
+    airPressure_Pa: m.airPressure_Pa ?? null,
+    airTemp_mK: m.airTemp_mK ?? null,
+    autoValidation: m.autoValidation ?? null,
+    deleted: m.deleted ?? null,
+    manualValidation: m.manualValidation ?? null,
+    timestamp: m.timestamp ?? m.time ?? null,
+    waterGround_mm: m.waterGround_mm ?? null,
+    waterNAP_mm: m.waterNAP_mm ?? null,
+    waterPressure_Pa: m.waterPressure_Pa ?? null,
+    waterTemp_mK: m.waterTemp_mK ?? null,
+    data: m
+  };
+
+  const { error } = await supabase
+    .from(SUPABASE_TABLE)
+    .upsert(record, { onConflict: ['location_id', 'timestamp'] });
+
+  if (error) console.error('Upsert error:', error, 'Record:', record);
+}
+
+// -------------------------------
+// Vercel handler
+// -------------------------------
+export default async function handler(req, res) {
   try {
-    const { rows } = await pool.query('SELECT 1');
-    res.status(200).json({ success: true, rows });
-  } catch(err) {
+    console.log('Starting BLIK sync...');
+    const offset = parseInt(req.query.offset || '0', 10);
+    const token = await getAccessToken();
+    console.log('Got Auth0 token:', token.slice(0, 10) + '...');
+
+    const locations = await fetchLocations(token);
+    console.log('Fetched locations:', locations.length);
+
+    const start = offset;
+    const end = Math.min(offset + BATCH_SIZE, locations.length);
+    const slice = locations.slice(start, end);
+
+    let imported = 0;
+
+    for (const loc of slice) {
+      const locationId = loc.id ?? loc.locationId ?? loc.location_id;
+      if (!locationId) continue;
+
+      console.log('Processing location:', locationId);
+      const lastTs = await getLatestTimestamp(locationId);
+      const measurements = await fetchMeasurements(token, locationId, lastTs);
+
+      for (const m of measurements) {
+        await upsertMeasurement(m);
+        imported++;
+      }
+    }
+
+    const nextOffset = end < locations.length ? end : null;
+
+    res.status(200).json({
+      success: true,
+      batch: { start, end: end - 1 },
+      imported,
+      nextOffset
+    });
+
+  } catch (err) {
+    console.error('Function error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
-};
+}

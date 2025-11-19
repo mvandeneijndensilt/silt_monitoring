@@ -1,5 +1,6 @@
 // api/fetch-to-supabase.js
 // Vercel serverless, pooler-compatible, fixed columns (BLIK_api)
+// Robust error handling + safe JSON + delta sync
 
 const fetch = require('node-fetch');
 const { Pool } = require('pg');
@@ -12,10 +13,15 @@ const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const PG_SUPABASE_URL = process.env.PG_SUPABASE_URL;
 
 const SUPABASE_TABLE = process.env.SUPABASE_TABLE || 'BLIK_api';
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '10', 10);
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '1', 10); // safe default
 const LIMIT_PER_PAGE = parseInt(process.env.LIMIT_PER_PAGE || '1000', 10);
 
 const METADATA_PATH = "/mnt/data/blik-metadata-v3.json";
+
+// ------------------------------------------------------------
+// Pool outside the handler for serverless reuse
+// ------------------------------------------------------------
+const pool = new Pool({ connectionString: PG_SUPABASE_URL });
 
 // ------------------------------------------------------------
 // AUTH0 TOKEN
@@ -42,39 +48,50 @@ async function getAccessToken() {
 // FETCH LOCATIONS
 // ------------------------------------------------------------
 async function fetchLocations(token) {
-  const res = await fetch(`https://${API_DOMAIN}/api/v3/locations`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  if (!res.ok) throw new Error(`Failed to load locations: ${res.status} ${await res.text()}`);
-  const body = await res.json();
-  return Array.isArray(body) ? body : Object.values(body);
+  try {
+    const res = await fetch(`https://${API_DOMAIN}/api/v3/locations`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) throw new Error(`Failed to load locations: ${res.status} ${await res.text()}`);
+    const body = await res.json();
+    return Array.isArray(body) ? body : Object.values(body);
+  } catch (err) {
+    console.error("fetchLocations error:", err);
+    return [];
+  }
 }
 
 // ------------------------------------------------------------
-// FETCH MEASUREMENTS (delta sync)
+// FETCH MEASUREMENTS
 // ------------------------------------------------------------
 async function fetchMeasurements(token, locationId, since = null) {
   const result = [];
   let after = since || null;
 
   while (true) {
-    const qs = new URLSearchParams({ limit: LIMIT_PER_PAGE });
-    if (after) qs.set("after", after);
+    try {
+      const qs = new URLSearchParams({ limit: LIMIT_PER_PAGE });
+      if (after) qs.set("after", after);
 
-    const res = await fetch(`https://${API_DOMAIN}/api/v2/locations/${locationId}/measurements?${qs}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+      const res = await fetch(`https://${API_DOMAIN}/api/v2/locations/${locationId}/measurements?${qs}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
-    if (!res.ok) throw new Error(`Measurements failed (${locationId}): ${res.status} ${await res.text()}`);
-    const page = await res.json();
-    if (!Array.isArray(page) || page.length === 0) break;
+      if (!res.ok) throw new Error(`Measurements failed (${locationId}): ${res.status} ${await res.text()}`);
+      const page = await res.json();
+      if (!Array.isArray(page) || page.length === 0) break;
 
-    result.push(...page);
-    if (page.length < LIMIT_PER_PAGE) break;
+      result.push(...page);
+      if (page.length < LIMIT_PER_PAGE) break;
 
-    const last = page[page.length - 1];
-    if (!last.timestamp) break;
-    after = last.timestamp;
+      const last = page[page.length - 1];
+      if (!last.timestamp) break;
+      after = last.timestamp;
+
+    } catch (err) {
+      console.error(`fetchMeasurements error for location ${locationId}:`, err);
+      break;
+    }
   }
 
   return since ? result.filter(m => new Date(m.timestamp) > new Date(since)) : result;
@@ -83,18 +100,23 @@ async function fetchMeasurements(token, locationId, since = null) {
 // ------------------------------------------------------------
 // GET LAST TIMESTAMP
 // ------------------------------------------------------------
-async function getLatestTimestamp(pool, locationId) {
-  const { rows } = await pool.query(
-    `SELECT timestamp FROM "${SUPABASE_TABLE}" WHERE location_id = $1 ORDER BY timestamp DESC LIMIT 1`,
-    [locationId]
-  );
-  return rows.length ? rows[0].timestamp : null;
+async function getLatestTimestamp(locationId) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT timestamp FROM "${SUPABASE_TABLE}" WHERE location_id = $1 ORDER BY timestamp DESC LIMIT 1`,
+      [locationId]
+    );
+    return rows.length ? rows[0].timestamp : null;
+  } catch (err) {
+    console.error(`getLatestTimestamp error for location ${locationId}:`, err);
+    return null;
+  }
 }
 
 // ------------------------------------------------------------
 // UPSERT FIXED COLUMNS
 // ------------------------------------------------------------
-async function upsertMeasurement(pool, m) {
+async function upsertMeasurement(m) {
   const sql = `
     INSERT INTO "${SUPABASE_TABLE}" (
       measurement_id, location_id, airPressure_Pa, airTemp_mK, autoValidation,
@@ -118,6 +140,7 @@ async function upsertMeasurement(pool, m) {
       updated_at = now();
   `;
 
+  const dataJson = JSON.parse(JSON.stringify(m)); // safe JSON
   const params = [
     m.id ?? null,
     m.locationId ?? m.location_id ?? m.location ?? null,
@@ -131,10 +154,14 @@ async function upsertMeasurement(pool, m) {
     m.waterNAP_mm ?? null,
     m.waterPressure_Pa ?? null,
     m.waterTemp_mK ?? null,
-    m // store full JSON
+    dataJson
   ];
 
-  await pool.query(sql, params);
+  try {
+    await pool.query(sql, params);
+  } catch (err) {
+    console.error('upsertMeasurement error:', err, 'Params:', params);
+  }
 }
 
 // ------------------------------------------------------------
@@ -150,23 +177,20 @@ module.exports = async (req, res) => {
     const end = Math.min(offset + BATCH_SIZE, locations.length);
     const slice = locations.slice(start, end);
 
-    const pool = new Pool({ connectionString: PG_SUPABASE_URL });
     let imported = 0;
 
     for (const loc of slice) {
       const locationId = loc.id ?? loc.locationId ?? loc.location_id;
       if (!locationId) continue;
 
-      const lastTs = await getLatestTimestamp(pool, locationId);
+      const lastTs = await getLatestTimestamp(locationId);
       const measurements = await fetchMeasurements(token, locationId, lastTs);
 
       for (const m of measurements) {
-        await upsertMeasurement(pool, m);
+        await upsertMeasurement(m);
         imported++;
       }
     }
-
-    await pool.end();
 
     const nextOffset = end < locations.length ? end : null;
     const nextUrl = nextOffset !== null ? `${req.url.split("?")[0]}?offset=${nextOffset}` : null;
@@ -181,7 +205,7 @@ module.exports = async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
+    console.error('Handler error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 };

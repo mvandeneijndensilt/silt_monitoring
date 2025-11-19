@@ -3,7 +3,7 @@
 // Batch import + delta sync for BLIK_api
 
 import fetch from 'node-fetch';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js": "^2.36.0';
 
 // -------------------------------
 // Supabase client (service_role for INSERT/UPSERT)

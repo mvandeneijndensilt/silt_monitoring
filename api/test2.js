@@ -14,7 +14,7 @@ const SUPABASE_TABLE = 'BLIK_api';
 
 // Config
 const AUTH_DOMAIN = "blik.eu.auth0.com";
-const API_DOMAIN = "water.bliksensing.nl"; // of lora.bliksensing.nl voor productie
+const API_DOMAIN = "water.bliksensing.nl";
 const CLIENT_ID = "ppiD46WfEm3i1R7cuQmSWHrhdXqWc96j";
 const AUDIENCE = "https://water.bliksensing.nl";
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
@@ -45,17 +45,20 @@ async function fetchLocations(token) {
   return Array.isArray(body) ? body : Object.values(body);
 }
 
-// Fetch measurements
+// Fetch measurements safely
 async function fetchMeasurements(token, locationId) {
   const res = await fetch(`https://${API_DOMAIN}/api/v3/locations/${locationId}/measurements?limit=5`, {
     headers: { Authorization: `Bearer ${token}` }
   });
   const page = await res.json();
   console.log('Fetched measurements for location', locationId, page);
+
+  // Return always an array
+  if (!Array.isArray(page)) return [];
   return page;
 }
 
-// Upsert measurement dynamisch
+// Upsert measurement dynamically
 async function upsertMeasurement(m) {
   const record = {
     measurement_id: m.id ?? null,
@@ -98,7 +101,7 @@ export default async function handler(req, res) {
       imported++;
     }
 
-    // Als er geen metingen zijn, maak een dummy record om te testen
+    // Voeg dummy record alleen toe als er echt geen metingen zijn
     if (imported === 0) {
       await upsertMeasurement({ testValue: 123 });
       imported = 1;

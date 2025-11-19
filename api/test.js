@@ -1,5 +1,8 @@
-// api/fetch-to-supabase.js
+// api/fetch-to-supabase-full.js
+// Fetch all BLIK measurements and upsert into Supabase
+
 // TLS workaround (development only)
+// Verwijder of commentaar in productie en gebruik correcte host met geldig cert
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 import fetch from 'node-fetch';
@@ -19,8 +22,8 @@ const SUPABASE_TABLE = 'BLIK_api';
 // Fixed config (mag zichtbaar)
 // -------------------------------
 const AUTH_DOMAIN = "blik.eu.auth0.com";
-const API_DOMAIN = "water.bliksensing.nl"; // of gebruik 'lora.bliksensing.nl' voor prod
-const BATCH_SIZE = 1;
+const API_DOMAIN = "water.bliksensing.nl"; // of lora.bliksensing.nl voor productie
+const BATCH_SIZE = 1;       // kan verhogen bij stabielere omgeving
 const LIMIT_PER_PAGE = 1000;
 const CLIENT_ID = "ppiD46WfEm3i1R7cuQmSWHrhdXqWc96j";
 const AUDIENCE = "https://water.bliksensing.nl";
@@ -56,7 +59,7 @@ async function getAccessToken() {
 }
 
 // -------------------------------
-// Fetch locations
+// Fetch all locations
 // -------------------------------
 async function fetchLocations(token) {
   const res = await fetch(`https://${API_DOMAIN}/api/v3/locations`, {
@@ -68,11 +71,11 @@ async function fetchLocations(token) {
 }
 
 // -------------------------------
-// Fetch measurements per location
+// Fetch all measurements for a location (no delta)
 // -------------------------------
-async function fetchMeasurements(token, locationId, since = null) {
+async function fetchMeasurements(token, locationId) {
   const results = [];
-  let after = since || null;
+  let after = null;
 
   while (true) {
     const qs = new URLSearchParams({ limit: LIMIT_PER_PAGE });
@@ -88,29 +91,14 @@ async function fetchMeasurements(token, locationId, since = null) {
     if (!Array.isArray(page) || page.length === 0) break;
 
     results.push(...page);
+
     if (page.length < LIMIT_PER_PAGE) break;
 
     after = page[page.length - 1]?.timestamp;
     if (!after) break;
   }
 
-  return since ? results.filter(m => new Date(m.timestamp) > new Date(since)) : results;
-}
-
-// -------------------------------
-// Get latest timestamp for delta sync
-// -------------------------------
-async function getLatestTimestamp(locationId) {
-  const { data, error } = await supabase
-    .from(SUPABASE_TABLE)
-    .select('timestamp')
-    .eq('location_id', locationId)
-    .order('timestamp', { ascending: false })
-    .limit(1)
-    .single();
-
-  if (error && error.code !== 'PGRST116') console.error('Latest timestamp error:', error);
-  return data?.timestamp || null;
+  return results;
 }
 
 // -------------------------------
@@ -145,7 +133,7 @@ async function upsertMeasurement(m) {
 // -------------------------------
 export default async function handler(req, res) {
   try {
-    console.log('Starting BLIK sync...');
+    console.log('Starting FULL BLIK sync...');
     const offset = parseInt(req.query.offset || '0', 10);
 
     const token = await getAccessToken();
@@ -165,8 +153,7 @@ export default async function handler(req, res) {
       if (!locationId) continue;
 
       console.log('Processing location:', locationId);
-      const lastTs = await getLatestTimestamp(locationId);
-      const measurements = await fetchMeasurements(token, locationId, lastTs);
+      const measurements = await fetchMeasurements(token, locationId);
 
       for (const m of measurements) {
         await upsertMeasurement(m);

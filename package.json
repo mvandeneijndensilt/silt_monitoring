@@ -1,0 +1,18 @@
+{
+  "name": "blik-project",
+  "version": "1.0.0",
+  "description": "Vercel serverless function to fetch BLIK measurements and insert into Supabase",
+  "main": "index.js",
+  "scripts": {
+    "start": "node api/fetch-to-supabase.js"
+  },
+  "dependencies": {
+    "pg": "^8.11.1",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Jouw Naam",
+  "license": "MIT"
+}

@@ -23,7 +23,7 @@ const SUPABASE_TABLE = 'BLIK_api';
 // -------------------------------
 const AUTH_DOMAIN = "blik.eu.auth0.com";
 const API_DOMAIN = "water.bliksensing.nl"; // of lora.bliksensing.nl voor productie
-const BATCH_SIZE = 1;       // kan verhogen bij stabielere omgeving
+const BATCH_SIZE = 10;       // kan verhogen bij stabielere omgeving
 const LIMIT_PER_PAGE = 1000;
 const CLIENT_ID = "ppiD46WfEm3i1R7cuQmSWHrhdXqWc96j";
 const AUDIENCE = "https://water.bliksensing.nl";

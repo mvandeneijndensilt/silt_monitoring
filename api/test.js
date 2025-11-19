@@ -1,11 +1,11 @@
 // api/fetch-to-supabase.js
-// Vercel serverless function: fetch BLIK measurements and upsert into Supabase
+// Fetch BLIK measurements and upsert into Supabase via Vercel
 
 import fetch from 'node-fetch';
 import { createClient } from '@supabase/supabase-js';
 
 // -------------------------------
-// Supabase client (service role for insert/upsert)
+// Supabase client
 // -------------------------------
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -15,7 +15,7 @@ const supabase = createClient(
 const SUPABASE_TABLE = 'BLIK_api';
 
 // -------------------------------
-// Fixed configuration (mag zichtbaar)
+// Fixed config (mag zichtbaar)
 // -------------------------------
 const AUTH_DOMAIN = "blik.eu.auth0.com";
 const API_DOMAIN = "water.bliksensing.nl";
@@ -25,10 +25,13 @@ const CLIENT_ID = "ppiD46WfEm3i1R7cuQmSWHrhdXqWc96j";
 const AUDIENCE = "https://water.bliksensing.nl";
 
 // -------------------------------
-// Auth0 token (CLIENT_SECRET = geheim)
+// Secret from env
 // -------------------------------
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 
+// -------------------------------
+// Auth0 token request
+// -------------------------------
 async function getAccessToken() {
   const res = await fetch(`https://${AUTH_DOMAIN}/oauth/token`, {
     method: 'POST',
@@ -64,7 +67,7 @@ async function fetchLocations(token) {
 }
 
 // -------------------------------
-// Fetch measurements for a location
+// Fetch measurements per location
 // -------------------------------
 async function fetchMeasurements(token, locationId, since = null) {
   const results = [];
@@ -77,6 +80,7 @@ async function fetchMeasurements(token, locationId, since = null) {
     const res = await fetch(`https://${API_DOMAIN}/api/v2/locations/${locationId}/measurements?${qs}`, {
       headers: { Authorization: `Bearer ${token}` }
     });
+
     if (!res.ok) throw new Error(`Failed measurements for location ${locationId}: ${res.status}`);
 
     const page = await res.json();
@@ -109,7 +113,7 @@ async function getLatestTimestamp(locationId) {
 }
 
 // -------------------------------
-// Upsert a measurement
+// Upsert measurement
 // -------------------------------
 async function upsertMeasurement(m) {
   const record = {
@@ -142,6 +146,7 @@ export default async function handler(req, res) {
   try {
     console.log('Starting BLIK sync...');
     const offset = parseInt(req.query.offset || '0', 10);
+
     const token = await getAccessToken();
     console.log('Got Auth0 token:', token.slice(0, 10) + '...');
 

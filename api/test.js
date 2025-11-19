@@ -1,5 +1,6 @@
 // api/fetch-to-supabase.js
-// Fetch BLIK measurements and upsert into Supabase via Vercel
+// TLS workaround (development only)
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 import fetch from 'node-fetch';
 import { createClient } from '@supabase/supabase-js';
@@ -18,7 +19,7 @@ const SUPABASE_TABLE = 'BLIK_api';
 // Fixed config (mag zichtbaar)
 // -------------------------------
 const AUTH_DOMAIN = "blik.eu.auth0.com";
-const API_DOMAIN = "water.bliksensing.nl";
+const API_DOMAIN = "water.bliksensing.nl"; // of gebruik 'lora.bliksensing.nl' voor prod
 const BATCH_SIZE = 1;
 const LIMIT_PER_PAGE = 1000;
 const CLIENT_ID = "ppiD46WfEm3i1R7cuQmSWHrhdXqWc96j";

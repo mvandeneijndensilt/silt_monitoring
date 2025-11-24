@@ -3,6 +3,15 @@ import requests
 from datetime import datetime, timedelta, timezone
 from supabase import create_client
 from time import sleep
+import logging
+
+# -----------------------------
+# LOGGING CONFIG
+# -----------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 # -----------------------------
 # CONFIG VIA ENVIRONMENT VARIABLES
@@ -52,19 +61,19 @@ def save_token(jwt, expires_at):
         "expires_at": expires_at.isoformat(),
         "created_at": datetime.utcnow().isoformat()
     }).execute()
-    print(f"🔐 Nieuw token opgeslagen → {token_id}")
+    logging.info(f"🔐 Nieuw token opgeslagen → {token_id}")
     return token_id
 
 def load_most_recent_token():
     sb = supabase_client()
     res = sb.table(TOKEN_TABLE).select("*").order("created_at", desc=True).limit(1).execute()
     if res.data:
-        print("📦 Laatste token geladen uit database.")
+        logging.info("📦 Laatste token geladen uit database.")
         return res.data[0]
     return None
 
 def request_new_jwt():
-    print("🔄 Nieuw JWT opvragen bij Auth0...")
+    logging.info("🔄 Nieuw JWT opvragen bij Auth0...")
     payload = {
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
@@ -77,120 +86,71 @@ def request_new_jwt():
     expires_in = resp.json().get("expires_in", 3600)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
     save_token(token, expires_at)
-    print("🟢 Nieuw JWT ontvangen en opgeslagen.")
+    logging.info("🟢 Nieuw JWT ontvangen en opgeslagen.")
     return token
 
 def validate_token(jwt):
-    print("⏳ Token bestaat — controle of deze werkt...")
+    logging.info("⏳ Token bestaat — controle of deze werkt...")
     test_url = f"{BASE_API_URL}/api/v3/locations"
     headers = {"Authorization": f"Bearer {jwt}"}
     resp = requests.get(test_url, headers=headers)
     if resp.status_code == 200:
-        print("🟢 JWT is geldig.")
+        logging.info("🟢 JWT is geldig.")
         return True
-    print(f"❌ JWT is ongeldig. Status: {resp.status_code}")
+    logging.warning(f"❌ JWT is ongeldig. Status: {resp.status_code}")
     return False
 
 def get_valid_jwt():
     saved = load_most_recent_token()
     if not saved:
-        print("❗ Geen token gevonden — nieuwe ophalen.")
+        logging.warning("❗ Geen token gevonden — nieuwe ophalen.")
         return request_new_jwt()
     jwt = saved["jwt"]
     expires_at = datetime.fromisoformat(saved["expires_at"])
     if expires_at < datetime.now(timezone.utc):
-        print("⏰ Token verlopen — vernieuwen.")
+        logging.info("⏰ Token verlopen — vernieuwen.")
         return request_new_jwt()
     if validate_token(jwt):
-        print("♻️ Bestaande token blijft gebruikt.")
+        logging.info("♻️ Bestaande token blijft gebruikt.")
         return jwt
-    print("🔄 Token werkt niet — nieuwe aanvragen.")
+    logging.info("🔄 Token werkt niet — nieuwe aanvragen.")
     return request_new_jwt()
 
 # -----------------------------
-# LOCATIE DETAILS OPSLAAN MET MAPPING
+# SAFE GET UTILITY
 # -----------------------------
-MAPPING = {
-    "id": "id",
-    "name": "name",
-    "internalName": "internalname",
-    "description": "description",
-    "address": "address",
-    "verticalDatum": "verticaldatum",
-    "groundLevel_position_mm": "groundlevel_position_mm",
-    "groundLevel_positioningDate": "groundlevel_positioningdate",
-    "groundLevel_positioningMethod": "groundlevel_positioningmethod",
-    "groundLevel_stability": "groundlevel_stability",
-    "landOwner_name": "landowner_name",
-    "landOwner_kvk": "landowner_kvk",
-    "landOwnerAgreements": "landowneragreements",
-    "dataRegimes": "dataregimes",
-    "well_horizontalPosition_coordinates_system": "well_horizontalposition_coordinates_system",
-    "well_horizontalPosition_coordinates_x": "well_horizontalposition_coordinates_x",
-    "well_horizontalPosition_coordinates_y": "well_horizontalposition_coordinates_y",
-    "well_horizontalPosition_positioningMethod": "well_horizontalposition_positioningmethod",
-    "well_wellHeadProtector": "well_wellheadprotector",
-    "well_lock": "well_lock",
-    "well_owner_name": "well_owner_name",
-    "well_owner_kvk": "well_owner_kvk",
-    "well_deliveryAccountableParty_name": "well_deliveryaccountableparty_name",
-    "well_deliveryAccountableParty_kvk": "well_deliveryaccountableparty_kvk",
-    "well_deliveryResponsibleParty_name": "well_deliveryresponsibleparty_name",
-    "well_deliveryResponsibleParty_kvk": "well_deliveryresponsibleparty_kvk",
-    "well_maintenanceResponsibleParty_name": "well_maintenanceresponsibleparty_name",
-    "well_maintenanceResponsibleParty_kvk": "well_maintenanceresponsibleparty_kvk",
-    "well_deliveryContext": "well_deliverycontext",
-    "well_constructionStandard": "well_constructionstandard",
-    "well_initialFunction": "well_initialfunction",
-    "well_constructionDate": "well_constructiondate",
-    "well_removed": "well_removed",
-    "well_removalDate": "well_removaldate",
-    "well_stability": "well_stability",
-    "well_externalIdentifiers_nitgCode": "well_externalidentifiers_nitgcode",
-    "well_externalIdentifiers_broId": "well_externalidentifiers_broid",
-    "well_tube_type": "well_tube_type",
-    "well_tube_id": "well_tube_id",
-    "well_tube_status": "well_tube_status",
-    "well_tube_tubeTop_position_mm": "well_tube_tubetop_position_mm",
-    "well_tube_tubeTop_positioningDate": "well_tube_tubetop_positioningdate",
-    "well_tube_tubeTop_positioningMethod": "well_tube_tubetop_positioningmethod",
-    "well_tube_tubeTop_innerDiameter_mm": "well_tube_tubetop_innerdiameter_mm",
-    "well_tube_tubeTop_outerDiameter_mm": "well_tube_tubetop_outerdiameter_mm",
-    "well_tube_variableDiameter": "well_tube_variablediameter",
-    "well_tube_cap": "well_tube_cap",
-    "well_tube_material_tube": "well_tube_material_tube",
-    "well_tube_material_tubePacking": "well_tube_material_tubepacking",
-    "well_tube_material_glue": "well_tube_material_glue",
-    "well_tube_groundWaterFlowJudgment": "well_tube_groundwaterflowjudgment",
-    "well_tube_plainTubePart_length_mm": "well_tube_plaintubepart_length_mm",
-    "well_tube_screen_length_mm": "well_tube_screen_length_mm",
-    "well_tube_screen_sockMaterial": "well_tube_screen_sockmaterial",
-    "well_tube_screen_protection": "well_tube_screen_protection",
-    "well_tube_sedimentSump_length_mm": "well_tube_sedimentsump_length_mm",
-}
+def safe_get_ref_field(ref, key, idx=-1, as_type=None):
+    if not ref:
+        return None
+    val = ref.get(key)
+    if isinstance(val, list):
+        if len(val) == 0:
+            return None
+        val = val[idx]
+    if as_type:
+        try:
+            val = as_type(val)
+        except (TypeError, ValueError):
+            return None
+    return val
 
-def fetch_location_details(location_id, token):
-    url = f"{BASE_API_URL}/api/v3/locations/{location_id}"
+# -----------------------------
+# LOCATION FETCH / STORE
+# -----------------------------
+def fetch_location_ids_from_api(token):
+    logging.info("📡 Ophalen locatie-overzicht vanuit API...")
+    url = f"{BASE_API_URL}/api/v2/locations"
     headers = {"Authorization": f"Bearer {token}"}
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
     data = resp.json()
-    record = {col_name: data.get(json_key) for json_key, col_name in MAPPING.items()}
-    record["updated_at"] = datetime.utcnow().isoformat()
-    return record
+    location_ids = [loc['id'] for loc in data]
+    logging.info(f"✅ {len(location_ids)} locatie-id's opgehaald uit API")
+    return location_ids, data
 
-def store_location_details(location_ids):
-    token = get_valid_jwt()
-    sb = supabase_client()
-    for idx, loc_id in enumerate(location_ids, start=1):
-        try:
-            record = fetch_location_details(loc_id, token)
-            sb.table(LOCATION_DETAILS_TABLE).upsert(record).execute()
-            print(f"✔ ({idx}/{len(location_ids)}) Locatie {loc_id} opgeslagen.")
-            sleep(0.05)
-        except Exception as e:
-            print(f"❌ Fout bij locatie {loc_id}: {e}")
-
+# -----------------------------
+# V2 LOCATIONS
+# -----------------------------
 V2_MAPPING = {
     "notificationStatus": "notificationstatus",
     "maxGroundWaterLevel": "maxgroundwaterlevel",
@@ -213,100 +173,26 @@ V2_MAPPING = {
 }
 
 def fetch_v2_location_record(loc):
-    """Map v2 locatie JSON naar dict geschikt voor Supabase insert."""
-    record = {supabase_col: loc.get(json_key) for json_key, supabase_col in V2_MAPPING.items()}
-    record["updated_at"] = datetime.utcnow().isoformat()
-    return record
+    return {supabase_col: loc.get(json_key) for json_key, supabase_col in V2_MAPPING.items()}
 
 def store_v2_locations_batch(location_data, token, batch_size=50):
-    """Sla v2 locatiedata op in Supabase in batches."""
     sb = supabase_client()
     total_saved = 0
-
     for batch_idx, batch_locs in enumerate(batch_list(location_data, batch_size), start=1):
-        records = []
-        print(f"📦 Batch {batch_idx}: {len(batch_locs)} v2 locaties verwerken...")
-
-        for loc in batch_locs:
-            try:
-                record = fetch_v2_location_record(loc)
-                records.append(record)
-            except Exception as e:
-                print(f"❌ Fout bij verwerken v2 locatie {loc.get('id')}: {e}")
-            sleep(REQUEST_SLEEP)
-
+        records = [fetch_v2_location_record(loc) for loc in batch_locs]
+        for rec in records:
+            rec["updated_at"] = datetime.utcnow().isoformat()
         if records:
             sb.table(V2_LOCATION_TABLE).upsert(records).execute()
             total_saved += len(records)
-            print(f"✅ Batch {batch_idx} opgeslagen ({len(records)} records).")
+            logging.info(f"✅ Batch {batch_idx} opgeslagen ({len(records)} records) in V2")
+        sleep(REQUEST_SLEEP)
+    logging.info(f"🎉 Totaal {total_saved} v2 locaties opgeslagen!")
 
-    print(f"🎉 Totaal {total_saved} v2 locaties opgeslagen!")
-
-             
 # -----------------------------
-# V3 LOCATIE DETAILS OPSLAAN MET MAPPING NAAR BLIK_LOCATIONS
+# V3 LOCATIONS
 # -----------------------------
-V3_TO_BLIK_LOCATION_MAPPING = {
-    "id": "id",
-    "name": "name",
-    "internalName": "internalname",
-    "description": "description",
-    "address": "address",
-    "dataRegimes": "dataregimes",
-    "landOwner_name": "landowner_name",
-    "landOwner_kvk": "landowner_kvk",
-    "landOwnerAgreements": "landowneragreements",
-    "verticalDatum": "verticaldatum",
-    "groundLevel_position_mm": "groundlevel_position_mm",
-    "groundLevel_positioningDate": "groundlevel_positioningdate",
-    "groundLevel_positioningMethod": "groundlevel_positioningmethod",
-    "groundLevel_stability": "groundlevel_stability",
-    "well_horizontalPosition_coordinates_system": "well_horizontalposition_coordinates_system",
-    "well_horizontalPosition_coordinates_x": "well_horizontalposition_coordinates_x",
-    "well_horizontalPosition_coordinates_y": "well_horizontalposition_coordinates_y",
-    "well_horizontalPosition_positioningMethod": "well_horizontalposition_positioningmethod",
-    "well_wellHeadProtector": "well_wellheadprotector",
-    "well_lock": "well_lock",
-    "well_owner_name": "well_owner_name",
-    "well_owner_kvk": "well_owner_kvk",
-    "well_deliveryAccountableParty_name": "well_deliveryaccountableparty_name",
-    "well_deliveryAccountableParty_kvk": "well_deliveryaccountableparty_kvk",
-    "well_deliveryResponsibleParty_name": "well_deliveryresponsibleparty_name",
-    "well_deliveryResponsibleParty_kvk": "well_deliveryresponsibleparty_kvk",
-    "well_maintenanceResponsibleParty_name": "well_maintenanceresponsibleparty_name",
-    "well_maintenanceResponsibleParty_kvk": "well_maintenanceresponsibleparty_kvk",
-    "well_deliveryContext": "well_deliverycontext",
-    "well_constructionStandard": "well_constructionstandard",
-    "well_initialFunction": "well_initialfunction",
-    "well_constructionDate": "well_constructiondate",
-    "well_removed": "well_removed",
-    "well_removalDate": "well_removaldate",
-    "well_stability": "well_stability",
-    "well_externalIdentifiers_nitgCode": "well_externalidentifiers_nitgcode",
-    "well_externalIdentifiers_broId": "well_externalidentifiers_broid",
-    "well_tube_type": "well_tube_type",
-    "well_tube_id": "well_tube_id",
-    "well_tube_status": "well_tube_status",
-    "well_tube_tubeTop_position_mm": "well_tube_tubetop_position_mm",
-    "well_tube_tubeTop_positioningDate": "well_tube_tubetop_positioningdate",
-    "well_tube_tubeTop_positioningMethod": "well_tube_tubetop_positioningmethod",
-    "well_tube_tubeTop_innerDiameter_mm": "well_tube_tubetop_innerdiameter_mm",
-    "well_tube_tubeTop_outerDiameter_mm": "well_tube_tubetop_outerdiameter_mm",
-    "well_tube_plainTubePart_length_mm": "well_tube_plaintubepart_length_mm",
-    "well_tube_screen_length_mm": "well_tube_screen_length_mm",
-    "well_tube_screen_sockMaterial": "well_tube_screen_sockmaterial",
-    "well_tube_screen_protection": "well_tube_screen_protection",
-    "well_tube_sedimentSump_length_mm": "well_tube_sedimentsump_length_mm",
-    "well_tube_variablediameter": "well_tube_variablediameter",
-    "well_tube_cap": "well_tube_cap",
-    "well_tube_material_tube": "well_tube_material_tube",
-    "well_tube_material_tubepacking": "well_tube_material_tubepacking",
-    "well_tube_material_glue": "well_tube_material_glue",
-    "well_tube_groundWaterFlowJudgment": "well_tube_groundwaterflowjudgment"
-}
-
 def flatten_v3_to_blik_location(loc):
-    """Map een API v3 locatie naar het formaat van blik_location_v3."""
     well = loc.get("well") or {}
     tube = well.get("tube") or {}
     tubeTop = tube.get("tubeTop") or {}
@@ -377,14 +263,13 @@ def flatten_v3_to_blik_location(loc):
     return record
 
 def store_v3_locations_to_blik_batch(location_ids, batch_size=50):
-    """Ophalen van v3 locatie-details en opslaan in blik_location_v3 in batches."""
     token = get_valid_jwt()
     sb = supabase_client()
     total_records = 0
 
     for batch_idx, batch_ids in enumerate(batch_list(location_ids, batch_size), start=1):
         records = []
-        print(f"📦 Batch {batch_idx}: {len(batch_ids)} locaties ophalen...")
+        logging.info(f"📦 Batch {batch_idx}: {len(batch_ids)} locaties ophalen...")
         for loc_id in batch_ids:
             try:
                 url = f"{BASE_API_URL}/api/v3/locations/{loc_id}"
@@ -394,127 +279,19 @@ def store_v3_locations_to_blik_batch(location_ids, batch_size=50):
                 loc_data = resp.json()
                 records.append(flatten_v3_to_blik_location(loc_data))
             except Exception as e:
-                print(f"❌ Fout bij locatie {loc_id}: {e}")
+                logging.warning(f"❌ Fout bij locatie {loc_id}: {e}")
             sleep(REQUEST_SLEEP)
 
         if records:
-            sb.table("blik_location_v3").upsert(records).execute()
+            sb.table(LOCATION_DETAILS_TABLE).upsert(records).execute()
             total_records += len(records)
-            print(f"✅ Batch {batch_idx} opgeslagen ({len(records)} records).")
+            logging.info(f"✅ Batch {batch_idx} opgeslagen ({len(records)} records) in V3")
 
-    print(f"🎉 Totaal {total_records} v3 locaties opgeslagen in blik_location_v3!")
-        
+    logging.info(f"🎉 Totaal {total_records} v3 locaties opgeslagen in {LOCATION_DETAILS_TABLE}!")
+
 # -----------------------------
-# REFERENTIEMETINGEN OPSLAAN MET SAFE GET LOGICA
+# REFERENTIEMETINGEN OPSLAAN
 # -----------------------------
-def safe_get_ref_field(ref, key, idx=-1, as_type=None):
-    """
-    Haal veilig een veld uit een referentiemeting op.
-    - converteert lege lijsten naar None
-    - kan optioneel typecasten naar int/float
-    """
-    if not ref:
-        return None
-
-    val = ref.get(key)
-
-    # lege lijst → None
-    if isinstance(val, list):
-        if len(val) == 0:
-            return None
-        val = val[idx]
-
-    # typecast indien gewenst
-    if as_type:
-        try:
-            val = as_type(val)
-        except (TypeError, ValueError):
-            return None
-
-    return val
-
-def flatten_reference(location_id, name, lat, lon, ref):
-    """
-    Flatten een referentiemeting dict/list naar een Supabase-ready record.
-    Zorgt dat integers en floats correct worden gecast, lege lijsten → None.
-    """
-    if not ref:
-        return None
-
-    # Normaliseer de structuur
-    if isinstance(ref, dict):
-        if "timestamps" in ref:
-            normalized = ref
-        elif "referenceMeasurements" in ref:
-            normalized = ref["referenceMeasurements"]
-        else:
-            normalized = ref
-    elif isinstance(ref, list) and len(ref) > 0 and isinstance(ref[0], dict):
-        normalized = ref[0]
-    else:
-        return None
-
-    idx = -1  # gebruik laatste item als default
-
-    def safe_int(val):
-        """Zet een waarde veilig om naar integer, None als het niet kan."""
-        try:
-            if val is None:
-                return None
-            return int(round(float(val)))  # float → int, rond af
-        except (ValueError, TypeError):
-            return None
-
-    def safe_float(val):
-        """Zet een waarde veilig om naar float, None als het niet kan."""
-        try:
-            if val is None:
-                return None
-            return float(val)
-        except (ValueError, TypeError):
-            return None
-
-    def safe_get_ref_field(ref_dict, key, idx=-1):
-        """Veilige getter voor lijst of enkelwaarde in referentiemeting."""
-        if not ref_dict:
-            return None
-        val = ref_dict.get(key)
-        if isinstance(val, list):
-            if len(val) == 0:
-                return None
-            return val[idx]
-        return val
-
-    rec = {
-        "location_id": safe_int(location_id),
-        "name": name,
-        "location_name": name,
-        "timestamp": safe_int(safe_get_ref_field(normalized, "timestamps", idx)),
-        "waterground_mm": safe_int(safe_get_ref_field(normalized, "waterGround_mm", idx)),
-        "waternap_mm": safe_int(safe_get_ref_field(normalized, "waterNAP_mm", idx)),
-        "validity": safe_get_ref_field(normalized, "validity", idx),
-        "airpressure_pa": safe_float(safe_get_ref_field(normalized, "airPressure_Pa", idx)),
-        "airtemp_mk": safe_float(safe_get_ref_field(normalized, "airTemp_mK", idx)),
-        "waterpressure_pa": safe_float(safe_get_ref_field(normalized, "waterPressure_Pa", idx)),
-        "watertemp_mk": safe_float(safe_get_ref_field(normalized, "waterTemp_mK", idx)),
-        "pm25_ugm3": safe_float(safe_get_ref_field(normalized, "pm25_ugm3", idx)),
-        "pm10_ugm3": safe_float(safe_get_ref_field(normalized, "pm10_ugm3", idx)),
-        "no2_ugm3": safe_float(safe_get_ref_field(normalized, "no2_ugm3", idx)),
-        "o3_ugm3": safe_float(safe_get_ref_field(normalized, "o3_ugm3", idx)),
-        "airtemperature_c": safe_float(safe_get_ref_field(normalized, "airtemperature_c", idx)),
-        "humidity_rh": safe_float(safe_get_ref_field(normalized, "humidity_rh", idx)),
-        "windspeed_ms": safe_float(safe_get_ref_field(normalized, "windspeed_ms", idx)),
-        "winddirection_deg": safe_float(safe_get_ref_field(normalized, "winddirection_deg", idx)),
-        "rain_mm": safe_float(safe_get_ref_field(normalized, "rain_mm", idx)),
-        "battery_v": safe_float(safe_get_ref_field(normalized, "battery_v", idx)),
-        "latitude": safe_float(lat),
-        "longitude": safe_float(lon),
-        "updated_at": datetime.utcnow().isoformat()
-    }
-
-    return rec
-
-
 def fetch_reference_measurement(location_id, name, lat, lon, token):
     url = f"{BASE_API_URL}/api/v2/locations/{location_id}/reference-measurements?limit=1"
     headers = {"Authorization": f"Bearer {token}"}
@@ -523,23 +300,12 @@ def fetch_reference_measurement(location_id, name, lat, lon, token):
     data = resp.json()
     return flatten_reference(location_id, name, lat, lon, data)
 
-def fetch_location_ids_from_api(token):
-    print("📡 Ophalen locatie-overzicht vanuit API...")
-    url = f"{BASE_API_URL}/api/v2/locations"
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(url, headers=headers)
-    resp.raise_for_status()
-    data = resp.json()
-    location_ids = [loc['id'] for loc in data]
-    print(f"✅ {len(location_ids)} locatie-id's opgehaald uit API")
-    return location_ids, data  # return ook volledige data voor naam/coords
-
 def store_reference_measurements_batch(location_data, token, batch_size=50):
     sb = supabase_client()
     total_saved = 0
 
     for batch_idx, batch_locs in enumerate(batch_list(location_data, batch_size), start=1):
-        print(f"📦 Batch {batch_idx}: {len(batch_locs)} referentiemetingen ophalen...")
+        logging.info(f"📦 Batch {batch_idx}: {len(batch_locs)} referentiemetingen ophalen...")
         records = []
         for loc in batch_locs:
             try:
@@ -553,25 +319,27 @@ def store_reference_measurements_batch(location_data, token, batch_size=50):
                 if rec:
                     records.append(rec)
             except Exception as e:
-                print(f"❌ Fout bij referentiemeting locatie {loc['id']}: {e}")
+                logging.warning(f"❌ Fout bij referentiemeting locatie {loc['id']}: {e}")
             sleep(REQUEST_SLEEP)
 
         if records:
             sb.table(REFERENCE_TABLE).upsert(records).execute()
             total_saved += len(records)
-            print(f"✅ Batch {batch_idx} opgeslagen ({len(records)} records).")
+            logging.info(f"✅ Batch {batch_idx} opgeslagen ({len(records)} records) in referentie")
 
-    print(f"🎉 Totaal {total_saved} referentiemetingen opgeslagen!")
-    
+    logging.info(f"🎉 Totaal {total_saved} referentiemetingen opgeslagen!")
+
+# -----------------------------
+# DEPLOYMENTS OPSLAAN
+# -----------------------------
 def store_location_deployments_flat_batch(location_ids, batch_size=50):
-    """Haal deployment info op en sla plat op in batches in Supabase."""
     token = get_valid_jwt()
     sb = supabase_client()
     total_saved = 0
 
     for batch_idx, batch_ids in enumerate(batch_list(location_ids, batch_size), start=1):
         records = []
-        print(f"📦 Batch {batch_idx}: {len(batch_ids)} locaties deployments ophalen...")
+        logging.info(f"📦 Batch {batch_idx}: {len(batch_ids)} locaties deployments ophalen...")
 
         for loc_id in batch_ids:
             try:
@@ -580,7 +348,6 @@ def store_location_deployments_flat_batch(location_ids, batch_size=50):
                 resp = requests.get(url, headers=headers)
                 resp.raise_for_status()
                 loc_data = resp.json()
-
                 deployments = loc_data.get("deployments") or [None]
 
                 for d in deployments:
@@ -608,49 +375,24 @@ def store_location_deployments_flat_batch(location_ids, batch_size=50):
                                 "created_at": datetime.utcnow().isoformat()
                             }
                             records.append(record)
-
                 sleep(REQUEST_SLEEP)
             except Exception as e:
-                print(f"❌ Fout bij ophalen deployments locatie {loc_id}: {e}")
+                logging.warning(f"❌ Fout bij ophalen deployments locatie {loc_id}: {e}")
 
         if records:
             sb.table("blik_serienummers").upsert(records).execute()
             total_saved += len(records)
-            print(f"✅ Batch {batch_idx} opgeslagen ({len(records)} deployment records).")
+            logging.info(f"✅ Batch {batch_idx} opgeslagen ({len(records)} deployment records)")
 
-    print(f"🎉 Totaal {total_saved} deployment records opgeslagen in blik_serienummers!")
-
-
-    if records:
-        sb.table("blik_serienummers").upsert(records).execute()
-        print(f"🎉 {len(records)} deployment records opgeslagen in blik_serienummers!")
-    else:
-        print("⚠️ Geen deployment records gevonden om op te slaan.")
-
+    logging.info(f"🎉 Totaal {total_saved} deployment records opgeslagen in blik_serienummers!")
 
 # -----------------------------
 # MAIN
 # -----------------------------
 if __name__ == "__main__":
-    # 1. Token ophalen
     token = get_valid_jwt()
-
-    # 2. Token éénmalig valideren
-    validate_token(token)
-
-    # 3. Locaties ophalen
     location_ids, location_data = fetch_location_ids_from_api(token)
-    
-    # V2 locatiedata opslaan in Supabase
     store_v2_locations_batch(location_data, token)
-
-    # V3 locatiedata opslaan in blik_location_v3 (batches)
-    store_v3_locations_to_blik_batch(location_ids, batch_size=50)
-
-    # Deployments / sensors plat opslaan
+    store_v3_locations_to_blik_batch(location_ids)
+    store_reference_measurements_batch(location_data, token)
     store_location_deployments_flat_batch(location_ids)
-
-    # Referentiemetingen ophalen & opslaan (batches)
-    store_reference_measurements_batch(location_data, token, batch_size=50)
-
-    print("🎉 Alle locatiegegevens en referentiemetingen succesvol opgehaald en opgeslagen!")

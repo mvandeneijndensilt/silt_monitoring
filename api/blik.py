@@ -2,7 +2,6 @@ import os
 import requests
 from datetime import datetime, timedelta, timezone
 from supabase import create_client
-from time import sleep
 import logging
 
 # -----------------------------
@@ -14,7 +13,7 @@ logging.basicConfig(
 )
 
 # -----------------------------
-# CONFIG VIA ENVIRONMENT VARIABLES
+# ENV VARIABLES
 # -----------------------------
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -29,15 +28,9 @@ LOCATION_DETAILS_TABLE = os.environ.get("LOCATION_DETAILS_TABLE", "blik_location
 REFERENCE_TABLE = os.environ.get("REFERENCE_TABLE", "blik_referentiemetingen")
 V2_LOCATION_TABLE = os.environ.get("V2_LOCATION_TABLE", "blik_location_v2")
 
-
-# -----------------------------
-# CHECK ENV VARIABLES
-# -----------------------------
-required_envs = [
-    SUPABASE_URL, SUPABASE_KEY, CLIENT_ID, CLIENT_SECRET
-]
+required_envs = [SUPABASE_URL, SUPABASE_KEY, CLIENT_ID, CLIENT_SECRET]
 if not all(required_envs):
-    logging.error("❌ Missing required environment variables. Exiting...")
+    logging.error("❌ Missing required environment variables.")
     raise SystemExit("Missing required environment variables.")
 
 # -----------------------------
@@ -47,11 +40,6 @@ def supabase_client():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -----------------------------
-# GLOBAL REQUEST SESSION
-# -----------------------------
-session = requests.Session()
-
-# -----------------------------
 # BATCH HELPER
 # -----------------------------
 def batch_list(lst, batch_size=1):
@@ -59,7 +47,7 @@ def batch_list(lst, batch_size=1):
         yield lst[i:i + batch_size]
 
 # -----------------------------
-# JWT TOKEN MANAGEMENT
+# TOKEN MANAGEMENT
 # -----------------------------
 def save_token(jwt, expires_at):
     sb = supabase_client()
@@ -91,88 +79,81 @@ def request_new_jwt():
     }
     resp = requests.post(TOKEN_URL, json=payload)
     resp.raise_for_status()
-    token = resp.json()["access_token"]
-    expires_in = resp.json().get("expires_in", 3600)
+    data = resp.json()
+    token = data["access_token"]
+    expires_in = data.get("expires_in", 3600)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
     save_token(token, expires_at)
     logging.info("🟢 Nieuw JWT ontvangen en opgeslagen.")
     return token
 
 def validate_token(jwt):
-    logging.info("⏳ Token bestaat — controle of deze werkt...")
+    logging.info("⏳ Token controle...")
     test_url = f"{BASE_API_URL}/api/v3/locations"
     headers = {"Authorization": f"Bearer {jwt}"}
-    resp = requests.get(test_url, headers=headers)
-    if resp.status_code == 200:
-        logging.info("🟢 JWT is geldig.")
-        return True
-    logging.warning(f"❌ JWT is ongeldig. Status: {resp.status_code}")
-    return False
+    try:
+        resp = requests.get(test_url, headers=headers)
+        return resp.status_code == 200
+    except:
+        return False
 
 def get_valid_jwt():
     saved = load_most_recent_token()
-    if not saved:
-        logging.warning("❗ Geen token gevonden — nieuwe ophalen.")
-        return request_new_jwt()
-    jwt = saved["jwt"]
-    expires_at = datetime.fromisoformat(saved["expires_at"])
-    if expires_at < datetime.now(timezone.utc):
-        logging.info("⏰ Token verlopen — vernieuwen.")
-        return request_new_jwt()
-    if validate_token(jwt):
-        logging.info("♻️ Bestaande token blijft gebruikt.")
-        return jwt
-    logging.info("🔄 Token werkt niet — nieuwe aanvragen.")
+    if saved:
+        jwt = saved["jwt"]
+        expires_at = datetime.fromisoformat(saved["expires_at"])
+        if expires_at > datetime.now(timezone.utc) and validate_token(jwt):
+            logging.info("♻️ Bestaande token geldig, gebruiken.")
+            return jwt
+        logging.info("⏰ Token verlopen of ongeldig, vernieuwen...")
     return request_new_jwt()
 
 # -----------------------------
-# SAFE GET UTILITY
+# SAFE GET
 # -----------------------------
 def safe_get_ref_field(ref, key, idx=-1, as_type=None):
     if not ref:
         return None
     val = ref.get(key)
     if isinstance(val, list):
-        if len(val) == 0:
+        if not val:
             return None
         val = val[idx]
     if as_type:
         try:
             val = as_type(val)
-        except (TypeError, ValueError):
+        except:
             return None
     return val
 
+# -----------------------------
+# FLATTEN REFERENCE
+# -----------------------------
 def flatten_reference(location_id, name, lat, lon, ref):
     if not ref:
         return None
-    if isinstance(ref, dict) and "timestamps" in ref:
+    if "timestamps" in ref:
         normalized = ref
-    elif isinstance(ref, dict) and "referenceMeasurements" in ref:
+    elif "referenceMeasurements" in ref:
         normalized = ref["referenceMeasurements"]
-    elif isinstance(ref, list) and len(ref) > 0:
+    elif isinstance(ref, list) and ref:
         normalized = ref[0]
     else:
         return None
 
     idx = -1
-    def safe_int(val):
+    def safe_int(v):
         try:
-            if val is None:
-                return None
-            return int(round(float(val)))
-        except (TypeError, ValueError):
+            return int(round(float(v))) if v is not None else None
+        except:
+            return None
+    def safe_float(v):
+        try:
+            return float(v) if v is not None else None
+        except:
             return None
 
-    def safe_float(val):
-        try:
-            if val is None:
-                return None
-            return float(val)
-        except (TypeError, ValueError):
-            return None
-
-    rec = {
+    return {
         "location_id": safe_int(location_id),
         "name": name,
         "location_name": name,
@@ -198,10 +179,9 @@ def flatten_reference(location_id, name, lat, lon, ref):
         "longitude": safe_float(lon),
         "updated_at": datetime.utcnow().isoformat()
     }
-    return rec
 
 # -----------------------------
-# LOCATION FETCH / STORE
+# FETCH LOCATIONS
 # -----------------------------
 def fetch_location_ids_from_api(token):
     logging.info("📡 Ophalen locatie-overzicht vanuit API...")
@@ -211,130 +191,62 @@ def fetch_location_ids_from_api(token):
     resp.raise_for_status()
     data = resp.json()
     location_ids = [loc['id'] for loc in data]
-    logging.info(f"✅ {len(location_ids)} locatie-id's opgehaald uit API")
+    logging.info(f"✅ {len(location_ids)} locatie-id's opgehaald")
     return location_ids, data
 
 # -----------------------------
-# V2 LOCATIONS
+# SERVERLESS HANDLER
 # -----------------------------
-V2_MAPPING = {
-    "notificationStatus": "notificationstatus",
-    "maxGroundWaterLevel": "maxgroundwaterlevel",
-    "currentGroundWaterLevel": "currentgroundwaterlevel",
-    "deployments": "deployments",
-    "minGroundWaterLevel": "mingroundwaterlevel",
-    "currentAirPressurePa": "currentairpressurepa",
-    "lastMeasurementAt": "lastmeasurementat",
-    "currentTemperatureKelvin": "currenttemperaturekelvin",
-    "latitude": "latitude",
-    "id": "id",
-    "description": "description",
-    "address": "address",
-    "currentBatteryVoltageVolts": "currentbatteryvoltagevolts",
-    "name": "name",
-    "lastMessageReceivedAt": "lastmessagereceivedat",
-    "averageGroundWaterLevel": "averagegroundwaterlevel",
-    "firmware": "firmware",
-    "longitude": "longitude"
-}
+def handler(event, context):
+    try:
+        token = get_valid_jwt()
+        location_ids, location_data = fetch_location_ids_from_api(token)
 
-def fetch_v2_location_record(loc):
-    return {supabase_col: loc.get(json_key) for json_key, supabase_col in V2_MAPPING.items()}
+        # V2
+        store_v2_locations_batch(location_data, token, batch_size=1)
+        # V3
+        store_v3_locations_to_blik_batch(location_ids, batch_size=1)
+        # Reference
+        store_reference_measurements_batch(location_data, token, batch_size=1)
+        # Deployments
+        store_location_deployments_flat_batch(location_ids, batch_size=1)
 
-def store_v2_locations_batch(location_data, token, batch_size=1):
+        return {"statusCode": 200, "body": f"✅ {len(location_data)} locaties verwerkt"}
+    except Exception as e:
+        logging.error(f"❌ Error: {e}")
+        return {"statusCode": 500, "body": f"❌ Error: {e}"}
+# -----------------------------
+# V2 LOCATIONS OPSLAAN
+# -----------------------------
+def store_v2_locations_batch(location_data, token, batch_size=5):
     sb = supabase_client()
     total_saved = 0
     for batch_idx, batch_locs in enumerate(batch_list(location_data, batch_size), start=1):
-        records = [fetch_v2_location_record(loc) for loc in batch_locs]
-        for rec in records:
+        records = []
+        for loc in batch_locs:
+            rec = {supabase_col: loc.get(json_key) for json_key, supabase_col in V2_MAPPING.items()}
             rec["updated_at"] = datetime.utcnow().isoformat()
+            records.append(rec)
+
         if records:
             sb.table(V2_LOCATION_TABLE).upsert(records).execute()
             total_saved += len(records)
-            logging.info(f"✅ Batch {batch_idx} opgeslagen ({len(records)} records) in V2")
-    logging.info(f"🎉 Totaal {total_saved} v2 locaties opgeslagen!")
+            logging.info(f"✅ V2 batch {batch_idx} opgeslagen ({len(records)} records)")
+
+    logging.info(f"🎉 Totaal {total_saved} V2 locaties opgeslagen!")
 
 # -----------------------------
-# V3 LOCATIONS
+# V3 LOCATIONS OPSLAAN
 # -----------------------------
-def flatten_v3_to_blik_location(loc):
-    well = loc.get("well") or {}
-    tube = well.get("tube") or {}
-    tubeTop = tube.get("tubeTop") or {}
-    plainTubePart = tube.get("plainTubePart") or {}
-    screen = tube.get("screen") or {}
-    sedimentSump = tube.get("sedimentSump") or {}
-    material = tube.get("material") or {}
-
-    record = {
-        "id": loc.get("id"),
-        "name": loc.get("name"),
-        "internalname": loc.get("internalName"),
-        "description": loc.get("description"),
-        "address": loc.get("address"),
-        "dataregimes": loc.get("dataRegimes"),
-        "landowner_name": (loc.get("landOwner") or {}).get("name"),
-        "landowner_kvk": (loc.get("landOwner") or {}).get("kvk"),
-        "landowneragreements": loc.get("landOwnerAgreements"),
-        "verticaldatum": loc.get("verticalDatum"),
-        "groundlevel_position_mm": (loc.get("groundLevel") or {}).get("position_mm"),
-        "groundlevel_positioningdate": (loc.get("groundLevel") or {}).get("positioningDate"),
-        "groundlevel_positioningmethod": (loc.get("groundLevel") or {}).get("positioningMethod"),
-        "groundlevel_stability": (loc.get("groundLevel") or {}).get("stability"),
-        "well_horizontalposition_coordinates_system": (well.get("horizontalPosition") or {}).get("coordinates", {}).get("system"),
-        "well_horizontalposition_coordinates_x": (well.get("horizontalPosition") or {}).get("coordinates", {}).get("x"),
-        "well_horizontalposition_coordinates_y": (well.get("horizontalPosition") or {}).get("coordinates", {}).get("y"),
-        "well_horizontalposition_positioningmethod": (well.get("horizontalPosition") or {}).get("positioningMethod"),
-        "well_wellheadprotector": well.get("wellHeadProtector"),
-        "well_lock": well.get("lock"),
-        "well_owner_name": (well.get("owner") or {}).get("name"),
-        "well_owner_kvk": (well.get("owner") or {}).get("kvk"),
-        "well_deliveryaccountableparty_name": (well.get("deliveryAccountableParty") or {}).get("name"),
-        "well_deliveryaccountableparty_kvk": (well.get("deliveryAccountableParty") or {}).get("kvk"),
-        "well_deliveryresponsibleparty_name": (well.get("deliveryResponsibleParty") or {}).get("name"),
-        "well_deliveryresponsibleparty_kvk": (well.get("deliveryResponsibleParty") or {}).get("kvk"),
-        "well_maintenanceresponsibleparty_name": (well.get("maintenanceResponsibleParty") or {}).get("name"),
-        "well_maintenanceresponsibleparty_kvk": (well.get("maintenanceResponsibleParty") or {}).get("kvk"),
-        "well_deliverycontext": well.get("deliveryContext"),
-        "well_constructionstandard": well.get("constructionStandard"),
-        "well_initialfunction": well.get("initialFunction"),
-        "well_constructiondate": well.get("constructionDate"),
-        "well_removed": well.get("removed"),
-        "well_removaldate": well.get("removalDate"),
-        "well_stability": well.get("stability"),
-        "well_externalidentifiers_nitgcode": (well.get("externalIdentifiers") or {}).get("nitgCode"),
-        "well_externalidentifiers_broid": (well.get("externalIdentifiers") or {}).get("broId"),
-        "well_tube_type": tube.get("type"),
-        "well_tube_id": tube.get("id"),
-        "well_tube_status": tube.get("status"),
-        "well_tube_variablediameter": tube.get("variableDiameter"),
-        "well_tube_cap": tube.get("cap"),
-        "well_tube_material_tube": material.get("tube"),
-        "well_tube_material_tubepacking": material.get("tubePacking"),
-        "well_tube_material_glue": material.get("glue"),
-        "well_tube_groundwaterflowjudgment": tube.get("groundWaterFlowJudgment"),
-        "well_tube_tubetop_position_mm": tubeTop.get("position_mm"),
-        "well_tube_tubetop_positioningdate": tubeTop.get("positioningDate"),
-        "well_tube_tubetop_positioningmethod": tubeTop.get("positioningMethod"),
-        "well_tube_tubetop_innerdiameter_mm": tubeTop.get("innerDiameter_mm"),
-        "well_tube_tubetop_outerdiameter_mm": tubeTop.get("outerDiameter_mm"),
-        "well_tube_plaintubepart_length_mm": plainTubePart.get("length_mm"),
-        "well_tube_screen_length_mm": screen.get("length_mm"),
-        "well_tube_screen_sockmaterial": screen.get("sockMaterial"),
-        "well_tube_screen_protection": screen.get("protection"),
-        "well_tube_sedimentsump_length_mm": sedimentSump.get("length_mm"),
-        "updated_at": datetime.utcnow().isoformat()
-    }
-    return record
-
-def store_v3_locations_to_blik_batch(location_ids, batch_size=1):
+def store_v3_locations_to_blik_batch(location_ids, batch_size=5):
     token = get_valid_jwt()
     sb = supabase_client()
-    total_records = 0
+    total_saved = 0
 
     for batch_idx, batch_ids in enumerate(batch_list(location_ids, batch_size), start=1):
         records = []
-        logging.info(f"📦 Batch {batch_idx}: {len(batch_ids)} locaties ophalen...")
+        logging.info(f"📦 V3 batch {batch_idx}: {len(batch_ids)} locaties ophalen...")
+
         for loc_id in batch_ids:
             try:
                 url = f"{BASE_API_URL}/api/v3/locations/{loc_id}"
@@ -348,29 +260,22 @@ def store_v3_locations_to_blik_batch(location_ids, batch_size=1):
 
         if records:
             sb.table(LOCATION_DETAILS_TABLE).upsert(records).execute()
-            total_records += len(records)
-            logging.info(f"✅ Batch {batch_idx} opgeslagen ({len(records)} records) in V3")
+            total_saved += len(records)
+            logging.info(f"✅ V3 batch {batch_idx} opgeslagen ({len(records)} records)")
 
-    logging.info(f"🎉 Totaal {total_records} v3 locaties opgeslagen in {LOCATION_DETAILS_TABLE}!")
+    logging.info(f"🎉 Totaal {total_saved} V3 locaties opgeslagen!")
 
 # -----------------------------
 # REFERENTIEMETINGEN OPSLAAN
 # -----------------------------
-def fetch_reference_measurement(location_id, name, lat, lon, token):
-    url = f"{BASE_API_URL}/api/v2/locations/{location_id}/reference-measurements?limit=1"
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(url, headers=headers)
-    resp.raise_for_status()
-    data = resp.json()
-    return flatten_reference(location_id, name, lat, lon, data)
-
-def store_reference_measurements_batch(location_data, token, batch_size=1):
+def store_reference_measurements_batch(location_data, token, batch_size=5):
     sb = supabase_client()
     total_saved = 0
 
     for batch_idx, batch_locs in enumerate(batch_list(location_data, batch_size), start=1):
-        logging.info(f"📦 Batch {batch_idx}: {len(batch_locs)} referentiemetingen ophalen...")
         records = []
+        logging.info(f"📦 Referentie batch {batch_idx}: {len(batch_locs)} locaties...")
+
         for loc in batch_locs:
             try:
                 rec = fetch_reference_measurement(
@@ -383,26 +288,26 @@ def store_reference_measurements_batch(location_data, token, batch_size=1):
                 if rec:
                     records.append(rec)
             except Exception as e:
-                logging.warning(f"❌ Fout bij referentiemeting locatie {loc['id']}: {e}")
+                logging.warning(f"❌ Fout referentiemeting locatie {loc['id']}: {e}")
 
         if records:
             sb.table(REFERENCE_TABLE).upsert(records).execute()
             total_saved += len(records)
-            logging.info(f"✅ Batch {batch_idx} opgeslagen ({len(records)} records) in referentie")
+            logging.info(f"✅ Referentie batch {batch_idx} opgeslagen ({len(records)} records)")
 
     logging.info(f"🎉 Totaal {total_saved} referentiemetingen opgeslagen!")
 
 # -----------------------------
 # DEPLOYMENTS OPSLAAN
 # -----------------------------
-def store_location_deployments_flat_batch(location_ids, batch_size=1):
+def store_location_deployments_flat_batch(location_ids, batch_size=5):
     token = get_valid_jwt()
     sb = supabase_client()
     total_saved = 0
 
     for batch_idx, batch_ids in enumerate(batch_list(location_ids, batch_size), start=1):
         records = []
-        logging.info(f"📦 Batch {batch_idx}: {len(batch_ids)} locaties deployments ophalen...")
+        logging.info(f"📦 Deployment batch {batch_idx}: {len(batch_ids)} locaties...")
 
         for loc_id in batch_ids:
             try:
@@ -429,7 +334,7 @@ def store_location_deployments_flat_batch(location_ids, batch_size=1):
                                 "to_time": d.get("toTime") if d else None,
                                 "flow_meter_coverage_m3": d.get("flowMeterCoverageM3") if d else None,
                                 "flow_meter_green_is_in": d.get("flowMeterGreenIsIn") if d else None,
-                                "flow_meter_pulse_amount_m3": d.get("flowMeterPulseAmountM3") if d else None,
+                                "flow_meter_pulse_amount_m3": d.get("FlowMeterPulseAmountM3") if d else None,
                                 "correction_type": corr.get("type") if corr else None,
                                 "correction_value": corr.get("value") if corr else None,
                                 "deleted": d.get("deleted") if d else None,
@@ -439,22 +344,11 @@ def store_location_deployments_flat_batch(location_ids, batch_size=1):
                             }
                             records.append(record)
             except Exception as e:
-                logging.warning(f"❌ Fout bij ophalen deployments locatie {loc_id}: {e}")
+                logging.warning(f"❌ Fout bij deployments locatie {loc_id}: {e}")
 
         if records:
             sb.table("blik_serienummers").upsert(records).execute()
             total_saved += len(records)
-            logging.info(f"✅ Batch {batch_idx} opgeslagen ({len(records)} deployment records)")
+            logging.info(f"✅ Deployment batch {batch_idx} opgeslagen ({len(records)} records)")
 
-    logging.info(f"🎉 Totaal {total_saved} deployment records opgeslagen in blik_serienummers!")
-
-# -----------------------------
-# MAIN EXECUTION
-# -----------------------------
-if __name__ == "__main__":
-    token = get_valid_jwt()
-    location_ids, location_data = fetch_location_ids_from_api(token)
-    store_v2_locations_batch(location_data, token)
-    store_v3_locations_to_blik_batch(location_ids)
-    store_reference_measurements_batch(location_data, token)
-    store_location_deployments_flat_batch(location_ids)
+    logging.info(f"🎉 Totaal {total_saved} deployment records opgeslagen!")

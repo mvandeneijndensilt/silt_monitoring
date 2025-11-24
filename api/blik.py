@@ -390,9 +390,26 @@ def store_location_deployments_flat_batch(location_ids, batch_size=50):
 # MAIN
 # -----------------------------
 if __name__ == "__main__":
-    token = get_valid_jwt()
-    location_ids, location_data = fetch_location_ids_from_api(token)
-    store_v2_locations_batch(location_data, token)
-    store_v3_locations_to_blik_batch(location_ids)
-    store_reference_measurements_batch(location_data, token)
-    store_location_deployments_flat_batch(location_ids)
+    try:
+        # 1. Token ophalen
+        token = get_valid_jwt()
+
+        # 2. Locaties ophalen
+        location_ids, location_data = fetch_location_ids_from_api(token)
+
+        # 3. V2 locatiedata opslaan
+        store_v2_locations_batch(location_data, token)
+
+        # 4. V3 locatiedata opslaan
+        store_v3_locations_to_blik_batch(location_ids)
+
+        # 5. Referentiemetingen opslaan
+        store_reference_measurements_batch(location_data, token)
+
+        # 6. Deployments / sensors opslaan
+        store_location_deployments_flat_batch(location_ids)
+
+        logging.info("🎉 Alle locatiegegevens en referentiemetingen succesvol opgehaald en opgeslagen!")
+
+    except Exception as e:
+        logging.exception(f"❌ Script gefaald: {e}")

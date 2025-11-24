@@ -1,2 +1,2 @@
-requests
-supabase
+requests==2.31.0
+supabase==1.0.0

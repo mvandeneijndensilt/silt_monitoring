@@ -8,7 +8,7 @@ from time import sleep
 # CONFIG VIA ENVIRONMENT VARIABLES
 # -----------------------------
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 CLIENT_SECRET = os.environ.get("CLIENT_SECRET")
 AUDIENCE = os.environ.get("AUDIENCE", "https://water.bliksensing.nl")

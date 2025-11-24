@@ -55,7 +55,7 @@ session = requests.Session()
 # -----------------------------
 # BATCH HELPER
 # -----------------------------
-def batch_list(lst, batch_size=50):
+def batch_list(lst, batch_size=1):
     for i in range(0, len(lst), batch_size):
         yield lst[i:i + batch_size]
 
@@ -242,7 +242,7 @@ V2_MAPPING = {
 def fetch_v2_location_record(loc):
     return {supabase_col: loc.get(json_key) for json_key, supabase_col in V2_MAPPING.items()}
 
-def store_v2_locations_batch(location_data, token, batch_size=50):
+def store_v2_locations_batch(location_data, token, batch_size=1):
     sb = supabase_client()
     total_saved = 0
     for batch_idx, batch_locs in enumerate(batch_list(location_data, batch_size), start=1):
@@ -329,7 +329,7 @@ def flatten_v3_to_blik_location(loc):
     }
     return record
 
-def store_v3_locations_to_blik_batch(location_ids, batch_size=50):
+def store_v3_locations_to_blik_batch(location_ids, batch_size=1):
     token = get_valid_jwt()
     sb = supabase_client()
     total_records = 0
@@ -367,7 +367,7 @@ def fetch_reference_measurement(location_id, name, lat, lon, token):
     data = resp.json()
     return flatten_reference(location_id, name, lat, lon, data)
 
-def store_reference_measurements_batch(location_data, token, batch_size=50):
+def store_reference_measurements_batch(location_data, token, batch_size=1):
     sb = supabase_client()
     total_saved = 0
 
@@ -399,7 +399,7 @@ def store_reference_measurements_batch(location_data, token, batch_size=50):
 # -----------------------------
 # DEPLOYMENTS OPSLAAN
 # -----------------------------
-def store_location_deployments_flat_batch(location_ids, batch_size=50):
+def store_location_deployments_flat_batch(location_ids, batch_size=1):
     token = get_valid_jwt()
     sb = supabase_client()
     total_saved = 0

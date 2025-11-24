@@ -29,7 +29,17 @@ LOCATION_DETAILS_TABLE = os.environ.get("LOCATION_DETAILS_TABLE", "blik_location
 REFERENCE_TABLE = os.environ.get("REFERENCE_TABLE", "blik_referentiemetingen")
 V2_LOCATION_TABLE = os.environ.get("V2_LOCATION_TABLE", "blik_location_v2")
 
-REQUEST_SLEEP = float(os.environ.get("REQUEST_SLEEP", 0.1))  # throttle per request
+REQUEST_SLEEP = float(os.environ.get("REQUEST_SLEEP", 0.1))
+
+# -----------------------------
+# CHECK ENV VARIABLES
+# -----------------------------
+required_envs = [
+    SUPABASE_URL, SUPABASE_KEY, CLIENT_ID, CLIENT_SECRET
+]
+if not all(required_envs):
+    logging.error("❌ Missing required environment variables. Exiting...")
+    raise SystemExit("Missing required environment variables.")
 
 # -----------------------------
 # SUPABASE CLIENT
@@ -50,7 +60,7 @@ def batch_list(lst, batch_size=50):
         yield lst[i:i + batch_size]
 
 # -----------------------------
-# JWT TOKEN LOGICA
+# JWT TOKEN MANAGEMENT
 # -----------------------------
 def save_token(jwt, expires_at):
     sb = supabase_client()
@@ -133,6 +143,63 @@ def safe_get_ref_field(ref, key, idx=-1, as_type=None):
         except (TypeError, ValueError):
             return None
     return val
+
+def flatten_reference(location_id, name, lat, lon, ref):
+    if not ref:
+        return None
+    if isinstance(ref, dict) and "timestamps" in ref:
+        normalized = ref
+    elif isinstance(ref, dict) and "referenceMeasurements" in ref:
+        normalized = ref["referenceMeasurements"]
+    elif isinstance(ref, list) and len(ref) > 0:
+        normalized = ref[0]
+    else:
+        return None
+
+    idx = -1
+    def safe_int(val):
+        try:
+            if val is None:
+                return None
+            return int(round(float(val)))
+        except (TypeError, ValueError):
+            return None
+
+    def safe_float(val):
+        try:
+            if val is None:
+                return None
+            return float(val)
+        except (TypeError, ValueError):
+            return None
+
+    rec = {
+        "location_id": safe_int(location_id),
+        "name": name,
+        "location_name": name,
+        "timestamp": safe_int(safe_get_ref_field(normalized, "timestamps", idx)),
+        "waterground_mm": safe_int(safe_get_ref_field(normalized, "waterGround_mm", idx)),
+        "waternap_mm": safe_int(safe_get_ref_field(normalized, "waterNAP_mm", idx)),
+        "validity": safe_get_ref_field(normalized, "validity", idx),
+        "airpressure_pa": safe_float(safe_get_ref_field(normalized, "airPressure_Pa", idx)),
+        "airtemp_mk": safe_float(safe_get_ref_field(normalized, "airTemp_mK", idx)),
+        "waterpressure_pa": safe_float(safe_get_ref_field(normalized, "waterPressure_Pa", idx)),
+        "watertemp_mk": safe_float(safe_get_ref_field(normalized, "waterTemp_mK", idx)),
+        "pm25_ugm3": safe_float(safe_get_ref_field(normalized, "pm25_ugm3", idx)),
+        "pm10_ugm3": safe_float(safe_get_ref_field(normalized, "pm10_ugm3", idx)),
+        "no2_ugm3": safe_float(safe_get_ref_field(normalized, "no2_ugm3", idx)),
+        "o3_ugm3": safe_float(safe_get_ref_field(normalized, "o3_ugm3", idx)),
+        "airtemperature_c": safe_float(safe_get_ref_field(normalized, "airtemperature_c", idx)),
+        "humidity_rh": safe_float(safe_get_ref_field(normalized, "humidity_rh", idx)),
+        "windspeed_ms": safe_float(safe_get_ref_field(normalized, "windspeed_ms", idx)),
+        "winddirection_deg": safe_float(safe_get_ref_field(normalized, "winddirection_deg", idx)),
+        "rain_mm": safe_float(safe_get_ref_field(normalized, "rain_mm", idx)),
+        "battery_v": safe_float(safe_get_ref_field(normalized, "battery_v", idx)),
+        "latitude": safe_float(lat),
+        "longitude": safe_float(lon),
+        "updated_at": datetime.utcnow().isoformat()
+    }
+    return rec
 
 # -----------------------------
 # LOCATION FETCH / STORE
@@ -387,29 +454,12 @@ def store_location_deployments_flat_batch(location_ids, batch_size=50):
     logging.info(f"🎉 Totaal {total_saved} deployment records opgeslagen in blik_serienummers!")
 
 # -----------------------------
-# MAIN
+# MAIN EXECUTION
 # -----------------------------
 if __name__ == "__main__":
-    try:
-        # 1. Token ophalen
-        token = get_valid_jwt()
-
-        # 2. Locaties ophalen
-        location_ids, location_data = fetch_location_ids_from_api(token)
-
-        # 3. V2 locatiedata opslaan
-        store_v2_locations_batch(location_data, token)
-
-        # 4. V3 locatiedata opslaan
-        store_v3_locations_to_blik_batch(location_ids)
-
-        # 5. Referentiemetingen opslaan
-        store_reference_measurements_batch(location_data, token)
-
-        # 6. Deployments / sensors opslaan
-        store_location_deployments_flat_batch(location_ids)
-
-        logging.info("🎉 Alle locatiegegevens en referentiemetingen succesvol opgehaald en opgeslagen!")
-
-    except Exception as e:
-        logging.exception(f"❌ Script gefaald: {e}")
+    token = get_valid_jwt()
+    location_ids, location_data = fetch_location_ids_from_api(token)
+    store_v2_locations_batch(location_data, token)
+    store_v3_locations_to_blik_batch(location_ids)
+    store_reference_measurements_batch(location_data, token)
+    store_location_deployments_flat_batch(location_ids)

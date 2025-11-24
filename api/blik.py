@@ -29,7 +29,6 @@ LOCATION_DETAILS_TABLE = os.environ.get("LOCATION_DETAILS_TABLE", "blik_location
 REFERENCE_TABLE = os.environ.get("REFERENCE_TABLE", "blik_referentiemetingen")
 V2_LOCATION_TABLE = os.environ.get("V2_LOCATION_TABLE", "blik_location_v2")
 
-REQUEST_SLEEP = float(os.environ.get("REQUEST_SLEEP", 0.1))
 
 # -----------------------------
 # CHECK ENV VARIABLES
@@ -253,7 +252,6 @@ def store_v2_locations_batch(location_data, token, batch_size=1):
             sb.table(V2_LOCATION_TABLE).upsert(records).execute()
             total_saved += len(records)
             logging.info(f"✅ Batch {batch_idx} opgeslagen ({len(records)} records) in V2")
-        sleep(REQUEST_SLEEP)
     logging.info(f"🎉 Totaal {total_saved} v2 locaties opgeslagen!")
 
 # -----------------------------
@@ -347,7 +345,6 @@ def store_v3_locations_to_blik_batch(location_ids, batch_size=1):
                 records.append(flatten_v3_to_blik_location(loc_data))
             except Exception as e:
                 logging.warning(f"❌ Fout bij locatie {loc_id}: {e}")
-            sleep(REQUEST_SLEEP)
 
         if records:
             sb.table(LOCATION_DETAILS_TABLE).upsert(records).execute()
@@ -387,7 +384,6 @@ def store_reference_measurements_batch(location_data, token, batch_size=1):
                     records.append(rec)
             except Exception as e:
                 logging.warning(f"❌ Fout bij referentiemeting locatie {loc['id']}: {e}")
-            sleep(REQUEST_SLEEP)
 
         if records:
             sb.table(REFERENCE_TABLE).upsert(records).execute()
@@ -442,7 +438,6 @@ def store_location_deployments_flat_batch(location_ids, batch_size=1):
                                 "created_at": datetime.utcnow().isoformat()
                             }
                             records.append(record)
-                sleep(REQUEST_SLEEP)
             except Exception as e:
                 logging.warning(f"❌ Fout bij ophalen deployments locatie {loc_id}: {e}")
 
